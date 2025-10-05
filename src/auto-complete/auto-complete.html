@@ -1,0 +1,22 @@
+<ng-template let-formFieldId="id">
+  <div
+    class="mat-mdc-autocomplete-panel mdc-menu-surface mdc-menu-surface--open"
+    role="listbox"
+    tabindex="-1"
+    [id]="id"
+    [class]="classList()"
+    [class.mat-mdc-autocomplete-visible]="showPanel()"
+    [class.mat-mdc-autocomplete-hidden]="!showPanel()"
+    [class.mat-autocomplete-panel-animations-enabled]="!_animationsDisabled"
+    [class.mat-primary]="color() === 'primary'"
+    [class.mat-accent]="color() === 'accent'"
+    [class.mat-warn]="color() === 'warn'"
+    [attr.aria-label]="ariaLabel() || null"
+    [attr.aria-labelledby]="getPanelAriaLabelledby(formFieldId)"
+    #panel
+  >
+    <ng-content></ng-content>
+  </div>
+</ng-template>
+
+{{ selectionModel.selected | json }}
