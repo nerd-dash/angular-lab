@@ -1,15 +1,17 @@
 <mat-form-field>
   <mat-label>Favorite food</mat-label>
-  <input matInput placeholder="Ex. Pizza" [autocomplete]="auto" multiple />
+  <input matInput placeholder="Ex. Pizza" [autocomplete]="auto" />
   <mat-hint>Type to search</mat-hint>
   <mat-icon matSuffix>sentiment_very_satisfied</mat-icon>
   <mat-icon matPrefix>restaurant</mat-icon>
   <auto-complete #auto="autocomplete">
-    @for (option of randomFoods(); track option) {
+    @for (option of randomFoods(); track trackFn(option)) {
     <mat-option [value]="option">
       {{ option }}
     </mat-option>
     }
   </auto-complete>
 </mat-form-field>
-{{ randomFoods() | json }}
+<div>
+  {{ auto.selected() | json }}
+</div>
