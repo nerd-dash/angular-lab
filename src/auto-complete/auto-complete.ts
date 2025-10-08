@@ -10,12 +10,14 @@ import {
   computed,
   ContentChildren,
   DestroyRef,
+  ElementRef,
   inject,
   Injector,
   input,
   model,
   OnDestroy,
   OnInit,
+  output,
   QueryList,
   signal,
   TemplateRef,
@@ -25,11 +27,15 @@ import {
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import {
   MAT_AUTOCOMPLETE_DEFAULT_OPTIONS,
+  MatAutocomplete,
+  MatAutocompleteActivatedEvent,
   MatAutocompleteDefaultOptions,
+  MatAutocompleteSelectedEvent,
 } from '@angular/material/autocomplete';
 import {
   _animationsDisabled,
   MAT_OPTION_PARENT_COMPONENT,
+  MatOptgroup,
   MatOption,
   MatOptionParentComponent,
   MatOptionSelectionChange,
@@ -37,19 +43,94 @@ import {
 import { defer, merge, Observable, startWith, Subject, Subscription, switchMap } from 'rxjs';
 
 /**
+ * Event emitted when an option is selected from the autocomplete.
+ */
+export interface AutoCompleteSelectedEvent {
+  source: AutoComplete<any>;
+  option: MatOption<any>;
+}
+
+/**
+ * Event emitted when an option is activated (focused) in the autocomplete.
+ */
+export interface AutoCompleteActivatedEvent {
+  source: AutoComplete<any>;
+  option: MatOption<any> | null;
+}
+
+/**
  * AutoComplete Component
  *
  * A highly customizable, signal-based autocomplete dropdown for Angular v20+.
  * Supports single and multiple selection, keyboard navigation, and ARIA accessibility.
- * Designed for use with standalone components and signals.
+ * Designed for use with standalone components and the modern Angular signal API.
+ *
+ * ## Features
+ * - **Signal-based API**: Uses Angular v20+ input(), output(), model(), and computed() APIs
+ * - **Single & Multi-Select**: Support for both selection modes with proper state management
+ * - **Keyboard Navigation**: Full keyboard support with ActiveDescendantKeyManager
+ * - **ARIA Accessibility**: Comprehensive ARIA attributes for screen readers
+ * - **Angular Material Integration**: Compatible with MatOption and MatOptgroup
+ * - **Reactive State**: Leverages signals for efficient change detection
+ * - **Scroll Management**: Programmatic control over panel scrolling
+ * - **Theme Support**: Material Design theming with color inputs
+ *
+ * ## Public API
+ * The component provides a public API compatible with Angular Material's MatAutocomplete:
+ * - `displayWith`: Function to map values to display strings
+ * - `autoActiveFirstOption`: Auto-highlight first option on open
+ * - `autoSelectActiveOption`: Auto-select option during navigation
+ * - `requireSelection`: Force user to select from options
+ * - `panelWidth`: Custom panel width
+ * - `disableRipple`: Disable Material ripple effects
+ * - `hideSingleSelectionIndicator`: Hide checkmarks in single-select mode
+ *
+ * ## Events
+ * - `optionSelected`: Emits when an option is selected
+ * - `opened`: Emits when the panel opens
+ * - `closed`: Emits when the panel closes
+ * - `optionActivated`: Emits when an option is focused via keyboard
  *
  * @template T The type of option values.
  *
  * @example
- * <auto-complete [multiple]="true" [ariaLabel]="'Choose options'">
- *   <mat-option *ngFor="let option of options" [value]="option">{{ option }}</mat-option>
+ * ```html
+ * <!-- Single selection -->
+ * <auto-complete [ariaLabel]="'Choose an option'">
+ *   <mat-option *ngFor="let option of options" [value]="option">
+ *     {{ option.label }}
+ *   </mat-option>
  * </auto-complete>
+ *
+ * <!-- Multiple selection -->
+ * <auto-complete [multiple]="true" [(selected)]="selectedValues">
+ *   <mat-option *ngFor="let option of options" [value]="option.id">
+ *     {{ option.name }}
+ *   </mat-option>
+ * </auto-complete>
+ *
+ * <!-- With display function -->
+ * <auto-complete [displayWith]="displayFn" [autoActiveFirstOption]="true">
+ *   <mat-option *ngFor="let user of users" [value]="user">
+ *     {{ user.name }}
+ *   </mat-option>
+ * </auto-complete>
+ * ```
+ *
+ * @example
+ * ```typescript
+ * // Component usage
+ * export class MyComponent {
+ *   options = ['Option 1', 'Option 2', 'Option 3'];
+ *   selectedValues = model<string[]>([]);
+ *
+ *   displayFn(value: User): string {
+ *     return value?.name ?? '';
+ *   }
+ * }
+ * ```
  */
+
 @Component({
   selector: 'auto-complete',
   standalone: true,
@@ -61,17 +142,6 @@ import { defer, merge, Observable, startWith, Subject, Subscription, switchMap }
   changeDetection: ChangeDetectionStrategy.OnPush,
   providers: [{ provide: MAT_OPTION_PARENT_COMPONENT, useExisting: AutoComplete }],
 })
-/**
- * AutoComplete<T>
- *
- * Implements a signal-based autocomplete dropdown panel for Angular forms and inputs.
- * - Supports single and multiple selection modes
- * - Integrates with Angular Material's MatOption
- * - Provides keyboard navigation and ARIA accessibility
- * - Uses signals and computed for reactive state
- *
- * @template T The type of option values.
- */
 export class AutoComplete<T>
   implements MatOptionParentComponent, OnInit, OnDestroy, AfterContentInit
 {
@@ -89,45 +159,126 @@ export class AutoComplete<T>
 
   // Inputs
   /**
-   * Whether multiple options can be selected.
+   * Function to map an option's value to its display value in the trigger input.
+   * Useful when working with complex objects as option values.
+   *
+   * @example
+   * displayWith = input<(value: User) => string>((user) => user?.name ?? '');
+   */
+  readonly displayWith = input<((value: T) => string) | null>(null);
+  /**
+   * Whether the first option should be highlighted when the panel opens.
+   * Can be configured globally through MAT_AUTOCOMPLETE_DEFAULT_OPTIONS.
    * @default false
    */
-  readonly multipleInput = input(false, { transform: coerceBooleanProperty, alias: 'multiple' });
+  readonly autoActiveFirstOption = input(
+    this.autoCompleteDefaults?.autoActiveFirstOption ?? false,
+    { transform: coerceBooleanProperty }
+  );
   /**
-   * CSS classes to apply to the autocomplete panel.
+   * Whether the active option should be selected as the user navigates with keyboard.
+   * When enabled, the value updates as the user arrows through options.
+   * @default false
+   */
+  readonly autoSelectActiveOption = input(
+    this.autoCompleteDefaults?.autoSelectActiveOption ?? false,
+    { transform: coerceBooleanProperty }
+  );
+  /**
+   * Whether the user is required to make a selection from the options.
+   * If enabled and user leaves without selecting, the value is reset.
+   * @default false
+   */
+  readonly requireSelection = input(this.autoCompleteDefaults?.requireSelection ?? false, {
+    transform: coerceBooleanProperty,
+  });
+  /**
+   * Specify the width of the autocomplete panel.
+   * Can be any CSS sizing value, otherwise matches the trigger width.
+   */
+  readonly panelWidth = input<string | number | undefined>(undefined);
+  /**
+   * Whether ripples are disabled within the autocomplete panel options.
+   * @default false
+   */
+  readonly disableRipple = input(false, { transform: coerceBooleanProperty });
+  /**
+   * Signal-based input for hiding single selection indicator.
+   * When true, checkmark indicators are hidden for single-selection options.
+   * @default false
+   */
+  readonly _hideSingleSelectionIndicator = input(
+    this.autoCompleteDefaults?.hideSingleSelectionIndicator ?? false,
+    {
+      transform: coerceBooleanProperty,
+      alias: 'hideSingleSelectionIndicator',
+    }
+  );
+  /**
+   * Getter for compatibility with MatOptionParentComponent interface.
+   * Returns true if hiding is enabled on this component or parent.
+   */
+  get hideSingleSelectionIndicator(): boolean {
+    return this._hideSingleSelectionIndicator();
+  }
+  /**
+   * Signal-based input for multiple selection mode.
+   * When true, allows selecting multiple options at once.
+   * @default false
+   */
+  readonly _multiple = input(false, {
+    transform: coerceBooleanProperty,
+    alias: 'multiple',
+  });
+
+  /**
+   * Getter for compatibility with MatOptionParentComponent interface.
+   * Returns true if multiple selection is enabled on this component or parent.
+   */
+  get multiple(): boolean {
+    return this._multiple();
+  }
+  /**
+   * CSS classes to apply to the autocomplete panel for custom styling.
+   * Classes are applied to the overlay panel element.
    */
   readonly classList = input([''], { transform: coerceStringArray });
   /**
-   * Theme color for the autocomplete panel.
+   * Theme color for the autocomplete panel (primary, accent, or warn).
+   * Supports Material Design theme palettes.
    */
-  readonly color = input<string>('');
+  readonly color = input<'primary' | 'accent' | 'warn' | undefined>();
   /**
    * ARIA label for the autocomplete panel.
+   * Used for accessibility when no visual label is present.
    */
   readonly ariaLabel = input<string | null>(null);
   /**
    * ARIA labelledby attribute for the autocomplete panel.
+   * References the ID of an element that labels the autocomplete.
    */
   readonly ariaLabelledby = input<string | null>(null);
   /**
-   * Function to compare option values for selection.
-   * @param o1 First value
-   * @param o2 Second value
-   * @returns True if values are considered equal
+   * Function to compare option values for selection state.
+   * Used to determine if an option should be marked as selected.
+   * @default (o1, o2) => o1 == o2
    */
   readonly compareWith = input<(o1: T, o2: T) => boolean>((o1, o2) => o1 == o2);
 
   // Template reference
   /**
    * Reference to the panel template for overlay rendering.
+   * Used by the autocomplete trigger directive.
    */
   readonly template = viewChild(TemplateRef);
 
-  // State
   /**
-   * Whether multiple selection is enabled (internal state).
+   * Element reference for the panel containing the autocomplete options.
+   * Used for scroll position management and DOM manipulation.
    */
-  multiple = false;
+  readonly panel = viewChild('panel', { read: ElementRef });
+
+  // State
   /**
    * Whether the autocomplete panel should be visible, based on option count.
    */
@@ -142,13 +293,17 @@ export class AutoComplete<T>
    */
   @ContentChildren(MatOption, { descendants: true }) options!: QueryList<MatOption>;
   /**
+   * QueryList of all MatOptgroup children in the panel.
+   */
+  @ContentChildren(MatOptgroup, { descendants: true }) optionGroups!: QueryList<MatOptgroup>;
+  /**
    * Keyboard manager for navigating options.
    */
   keyManager!: ActiveDescendantKeyManager<MatOption<T>>;
   /**
    * Signal model for selected option values.
    */
-  selected = model<T[]>([]);
+  selected = model<T[]>([]); // signal-based API
   /**
    * SelectionModel for managing selected options.
    */
@@ -169,6 +324,25 @@ export class AutoComplete<T>
   protected readonly _animationsDisabled = _animationsDisabled();
 
   // Events
+  /**
+   * Emits when an option is selected.
+   */
+  /**
+   * Emits when an option is selected.
+   */
+  readonly optionSelected = output<MatAutocompleteSelectedEvent>();
+  /**
+   * Emits when the panel is opened.
+   */
+  readonly opened = output<void>();
+  /**
+   * Emits when the panel is closed.
+   */
+  readonly closed = output<void>();
+  /**
+   * Emits when an option is activated (focused).
+   */
+  readonly optionActivated = output<MatAutocompleteActivatedEvent>();
   /**
    * Emits whenever an option is selected in single-selection mode.
    */
@@ -197,33 +371,58 @@ export class AutoComplete<T>
     return this._initialized.pipe(switchMap(() => this.optionSelectionChanges));
   });
 
-  /** Gets the aria-labelledby for the autocomplete panel. */
   /**
    * Gets the aria-labelledby attribute value for the autocomplete panel.
    * @param labelId The label ID from the form field
    * @returns The aria-labelledby string or null
    */
-  protected getPanelAriaLabelledby(labelId: string | null): string | null {
-    if (this.ariaLabel()) {
+  getPanelAriaLabelledby(labelId: string | null): string | null {
+    if (typeof this.ariaLabel === 'function' ? this.ariaLabel() : this.ariaLabel) {
       return null;
     }
     const labelExpression = labelId ? labelId + ' ' : '';
-    return this.ariaLabelledby() ? labelExpression + this.ariaLabelledby() : labelId;
+    return typeof this.ariaLabelledby === 'function'
+      ? this.ariaLabelledby()
+        ? labelExpression + this.ariaLabelledby()
+        : labelId
+      : labelId;
+  }
+
+  /**
+   * Manually sets the panel scroll position.
+   */
+  setScrollTop(scrollTop: number): void {
+    this.panel()!.nativeElement.scrollTop = scrollTop;
+  }
+
+  /**
+   * Gets the panel's scroll position.
+   */
+  getScrollTop(): number {
+    return this.panel()?.nativeElement.scrollTop ?? 0;
+  }
+
+  /**
+   * Updates panel visibility based on options.
+   */
+  setVisibility(): void {
+    this.showPanel.set(this.options.length > 0);
+    this.cdr.markForCheck();
+  }
+
+  /**
+   * Emits the select event for an option.
+   */
+  emitSelectEvent(option: MatOption<T>): void {
+    const event = new MatAutocompleteSelectedEvent(this as unknown as MatAutocomplete, option);
+    this.optionSelected.emit(event);
   }
 
   /**
    * Constructor: initializes multiple selection from parent context.
    */
-  constructor() {
-    this.multiple = this.optionParent?.multiple ?? false;
-  }
-
-  /**
-   * Angular lifecycle: initializes selection model and multiple state.
-   */
   ngOnInit(): void {
-    this.multiple = this.multipleInput();
-    this.selectionModel = new SelectionModel<T>(this.multipleInput());
+    this.selectionModel = new SelectionModel<T>(this._multiple());
   }
 
   /**
@@ -237,14 +436,25 @@ export class AutoComplete<T>
   /**
    * Angular lifecycle: initializes key manager, selection logic, and subscriptions.
    * Handles option selection, panel visibility, and keyboard navigation.
+   * Subscriptions are delegated to private methods for clarity and maintainability.
    */
   ngAfterContentInit(): void {
     this.keyManager = new ActiveDescendantKeyManager<MatOption<T>>(this.options)
       .withWrap()
-      .skipPredicate(() => this._skipPredicate());
+      .skipPredicate(() => this.skipPredicate());
 
-    this.showPanel.set(this.options.length > 0);
+    this.setVisibility();
 
+    this._subscribeToOptionSelectionChanges();
+    this._subscribeToOptionsChanges();
+    this._subscribeToKeyManagerChanges();
+  }
+
+  /**
+   * Subscribes to option selection change events and updates selection state.
+   * Ensures correct selection logic for single and multiple modes.
+   */
+  private _subscribeToOptionSelectionChanges(): void {
     this.optionSelectionChanges.pipe(takeUntilDestroyed(this.destroyRef)).subscribe((event) => {
       this.cdr.markForCheck();
       const option = event.source.value;
@@ -264,7 +474,13 @@ export class AutoComplete<T>
         this.singleSelectionChangeSubject.next();
       }
     });
+  }
 
+  /**
+   * Subscribes to changes in the options QueryList and updates panel visibility and selection.
+   * Ensures the panel reflects the current set of options and their selection state.
+   */
+  private _subscribeToOptionsChanges(): void {
     this.options.changes.pipe(takeUntilDestroyed(this.destroyRef)).subscribe((changes) => {
       this.cdr.markForCheck();
       this.showPanel.set(false);
@@ -275,9 +491,15 @@ export class AutoComplete<T>
           op.deselect(false);
         }
       });
-      this.showPanel.set(changes.length > 0);
+      this.setVisibility();
     });
+  }
 
+  /**
+   * Subscribes to key manager active item changes and scrolls the active option into view.
+   * Maintains accessibility and user experience for keyboard navigation.
+   */
+  private _subscribeToKeyManagerChanges(): void {
     this.keyManager.change.pipe(takeUntilDestroyed(this.destroyRef)).subscribe(() => {
       this.cdr.markForCheck();
       const activeOption = this.options.toArray().at(this.keyManager?.activeItemIndex!);
@@ -292,7 +514,7 @@ export class AutoComplete<T>
    * Predicate for skipping options in keyboard navigation (override for custom logic).
    * @returns False by default (no options skipped)
    */
-  protected _skipPredicate(): boolean {
+  skipPredicate(): boolean {
     return false;
   }
 }

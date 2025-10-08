@@ -5,7 +5,7 @@
   <mat-icon matSuffix>sentiment_very_satisfied</mat-icon>
   <mat-icon matPrefix>restaurant</mat-icon>
   <auto-complete #auto="autocomplete">
-    @for (option of randomFoods(); track trackFn(option)) {
+    @for (option of _randomFood(); track trackFn(option)) {
     <mat-option [value]="option">
       {{ option }}
     </mat-option>

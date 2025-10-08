@@ -37,22 +37,22 @@ export class App implements OnInit {
     'Burger',
     'Salad',
     'Tacos',
-    'Ramen',
-    'Steak',
-    'Falafel',
-    'Curry',
-    'Dumplings',
-    'Paella',
-    'Biryani',
-    'Gnocchi',
-    'Bruschetta',
-    'Gelato',
-    'Tiramisu',
+    // 'Ramen',
+    // 'Steak',
+    // 'Falafel',
+    // 'Curry',
+    // 'Dumplings',
+    // 'Paella',
+    // 'Biryani',
+    // 'Gnocchi',
+    // 'Bruschetta',
+    // 'Gelato',
+    // 'Tiramisu',
   ]);
 
   ngOnInit(): void {}
 
-  _randomFood = toSignal(EMPTY.pipe(map(() => this.getRandomFoods(8))), {
+  _randomFood = toSignal(interval(3000).pipe(map(() => this.getRandomFoods(3))), {
     initialValue: this.randomFoods(),
   });
 
